@@ -20,7 +20,7 @@ from openai import OpenAI
 
 # ---------- CONFIG ----------
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
-CATEGORIES = ["Urgent", "Sales Lead", "Support", "Notification", "Spam", "Other"]
+CATEGORIES = ["Important", "Notification", "Spam"]
 LABEL_PREFIX = "AI/"
 MAX_EMAILS_TO_PROCESS = 20
 OPENAI_MODEL = "gpt-4o-mini"
@@ -125,34 +125,32 @@ def get_header(headers, name):
 
 
 def classify_and_draft(sender, subject, body):
-    prompt = f"""You are triaging a business inbox. Categorize the email below into exactly one of:
-{CATEGORIES}
+    prompt = f"""You are triaging a personal/business inbox. Categorize the email below into exactly
+one of these 3 categories:
 
-Category definitions:
-- "Urgent": a real person needs a time-sensitive response (angry customer, deadline, problem to fix).
-- "Sales Lead": a real potential customer/client asking about pricing, services, or interested in buying.
-- "Support": a real customer asking a question or reporting an issue, not urgent.
-- "Notification": automated emails from platforms/services — job boards (Indeed, Internshala, LinkedIn job alerts),
-  newsletters, social media alerts, "your invoice is ready", shipping updates, calendar reminders, app/platform
-  notifications, no-reply@ senders, marketing emails from companies, etc. These are machine-generated and do NOT
-  need or expect a human reply.
-- "Spam": unsolicited junk, phishing, scams, irrelevant cold outreach.
-- "Other": anything real that doesn't fit above (e.g. personal email, internal FYI).
+- "Important": a genuine, personal email written BY A REAL, SPECIFIC PERSON, addressed to the
+  recipient individually, containing something that actually matters and reasonably expects a
+  human reply (a real question, request, business inquiry, personal message, something needing
+  a decision or response). This is the ONLY category that should ever get a draft reply.
 
-CRITICAL RULE: only "Urgent", "Sales Lead", and "Support" ever get a draft_reply. For every other category
-(Notification, Spam, Other), draft_reply MUST be an empty string "" — do not write a reply to automated
-notifications, job board alerts, newsletters, or company platform emails under any circumstances, even if the
-content is technically addressed to the recipient.
+- "Notification": any automated, bulk, or platform-generated email — job board alerts (Indeed,
+  Internshala, LinkedIn, Naukri, etc.), newsletters, receipts, shipping updates, calendar
+  reminders, app/platform notifications, "no-reply@" senders, social media alerts, promotional
+  emails from real companies, or any mass-sent message. These do NOT need or expect a human reply,
+  even if well-written or personalized-looking.
 
-If the sender address contains "noreply", "no-reply", "notifications@", "jobs@", "alerts@", or is clearly an
-automated platform (Indeed, Internshala, LinkedIn, GitHub, Slack, Zoom, Calendly, etc.), it is almost always
-"Notification" — not Urgent, not Support, not Sales Lead — regardless of the subject line wording.
+- "Spam": unsolicited junk, phishing, scams, or clearly irrelevant cold outreach.
+
+Hard rule: if the sender address contains "noreply", "no-reply", "notifications@", "jobs@",
+"alerts@", "newsletter@", or is a known automated platform (Indeed, Internshala, LinkedIn, GitHub,
+Slack, Zoom, Calendly, etc.), it is almost always "Notification" regardless of subject line wording
+— never "Important", even if the content mentions the recipient's name or seems relevant to them.
 
 Respond with ONLY valid JSON, no markdown, no extra text, in this exact format:
 {{
   "category": one of {CATEGORIES},
   "reason": "one short sentence explaining why",
-  "draft_reply": "a short, professional draft reply (2-4 sentences), or empty string per the rule above"
+  "draft_reply": "a short, professional draft reply (2-4 sentences), ONLY if category is Important. Otherwise empty string \\"\\"."
 }}
 
 From: {sender}
@@ -173,7 +171,7 @@ Body:
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
-        return {"category": "Other", "reason": "Could not parse AI response", "draft_reply": ""}
+        return {"category": "Notification", "reason": "Could not parse AI response", "draft_reply": ""}
 
 
 def create_draft_reply(service, to_addr, subject, body_text, thread_id, original_msg_id):
@@ -208,9 +206,9 @@ def process_inbox(service):
         if category not in CATEGORIES:
             category = "Other"
 
-        # Hard rule at the code level, not just the prompt: only these
-        # categories are ever allowed to get a draft reply.
-        DRAFT_ALLOWED_CATEGORIES = {"Urgent", "Sales Lead", "Support"}
+        # Hard rule at the code level, not just the prompt: only "Important"
+        # emails are ever allowed to get a draft reply.
+        DRAFT_ALLOWED_CATEGORIES = {"Important"}
 
         service.users().messages().modify(
             userId="me", id=msg_meta["id"], body={"addLabelIds": [label_ids[category]]}
