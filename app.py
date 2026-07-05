@@ -13,6 +13,7 @@ import base64
 from email.mime.text import MIMEText
 
 from flask import Flask, redirect, request, session, url_for, render_template_string
+from werkzeug.middleware.proxy_fix import ProxyFix
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from openai import OpenAI
@@ -25,6 +26,7 @@ MAX_EMAILS_TO_PROCESS = 20
 OPENAI_MODEL = "gpt-4o-mini"
 
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 app.secret_key = os.environ["FLASK_SECRET_KEY"]
 
 # Google OAuth client config comes from an environment variable (the full
@@ -240,11 +242,28 @@ def home():
 
 @app.route("/oauth2callback")
 def oauth2callback():
-    state = session["state"]
+    state = session.get("state")
+    code_verifier = session.get("code_verifier")
+    if not state or not code_verifier:
+        return render_template_string(
+            "<p>Session expired or link already used. <a href='/'>Click here to try again</a>.</p>"
+        ), 400
+
     flow = Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES, state=state,
                                     redirect_uri=url_for("oauth2callback", _external=True))
-    flow.code_verifier = session["code_verifier"]
-    flow.fetch_token(authorization_response=request.url)
+    flow.code_verifier = code_verifier
+    try:
+        flow.fetch_token(authorization_response=request.url)
+    except Exception:
+        return render_template_string(
+            "<p>That login link was already used or expired. "
+            "<a href='/'>Click here to start over</a> — just click Connect Gmail once and don't refresh.</p>"
+        ), 400
+
+    # Clear so the same code/state can't be replayed if the page is refreshed
+    session.pop("state", None)
+    session.pop("code_verifier", None)
+
     creds = flow.credentials
 
     service = build("gmail", "v1", credentials=creds)
