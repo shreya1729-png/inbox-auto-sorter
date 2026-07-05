@@ -209,6 +209,7 @@ def home():
     flow = Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES, redirect_uri=url_for("oauth2callback", _external=True))
     auth_url, state = flow.authorization_url(access_type="offline", include_granted_scopes="true", prompt="consent")
     session["state"] = state
+    session["code_verifier"] = flow.code_verifier
     return render_template_string(HOME_PAGE, auth_url=auth_url)
 
 
@@ -217,6 +218,7 @@ def oauth2callback():
     state = session["state"]
     flow = Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES, state=state,
                                     redirect_uri=url_for("oauth2callback", _external=True))
+    flow.code_verifier = session["code_verifier"]
     flow.fetch_token(authorization_response=request.url)
     creds = flow.credentials
 
@@ -228,3 +230,5 @@ def oauth2callback():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
+
