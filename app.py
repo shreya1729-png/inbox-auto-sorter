@@ -19,9 +19,9 @@ from openai import OpenAI
 
 # ---------- CONFIG ----------
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
-CATEGORIES = ["Urgent", "Sales Lead", "Support", "Spam", "Other"]
+CATEGORIES = ["Urgent", "Sales Lead", "Support", "Notification", "Spam", "Other"]
 LABEL_PREFIX = "AI/"
-MAX_EMAILS_TO_PROCESS = 10
+MAX_EMAILS_TO_PROCESS = 20
 OPENAI_MODEL = "gpt-4o-mini"
 
 app = Flask(__name__)
@@ -123,13 +123,34 @@ def get_header(headers, name):
 
 
 def classify_and_draft(sender, subject, body):
-    prompt = f"""You are triaging business email. Read the email below and respond with ONLY valid JSON,
-no markdown, no extra text, in this exact format:
+    prompt = f"""You are triaging a business inbox. Categorize the email below into exactly one of:
+{CATEGORIES}
 
+Category definitions:
+- "Urgent": a real person needs a time-sensitive response (angry customer, deadline, problem to fix).
+- "Sales Lead": a real potential customer/client asking about pricing, services, or interested in buying.
+- "Support": a real customer asking a question or reporting an issue, not urgent.
+- "Notification": automated emails from platforms/services — job boards (Indeed, Internshala, LinkedIn job alerts),
+  newsletters, social media alerts, "your invoice is ready", shipping updates, calendar reminders, app/platform
+  notifications, no-reply@ senders, marketing emails from companies, etc. These are machine-generated and do NOT
+  need or expect a human reply.
+- "Spam": unsolicited junk, phishing, scams, irrelevant cold outreach.
+- "Other": anything real that doesn't fit above (e.g. personal email, internal FYI).
+
+CRITICAL RULE: only "Urgent", "Sales Lead", and "Support" ever get a draft_reply. For every other category
+(Notification, Spam, Other), draft_reply MUST be an empty string "" — do not write a reply to automated
+notifications, job board alerts, newsletters, or company platform emails under any circumstances, even if the
+content is technically addressed to the recipient.
+
+If the sender address contains "noreply", "no-reply", "notifications@", "jobs@", "alerts@", or is clearly an
+automated platform (Indeed, Internshala, LinkedIn, GitHub, Slack, Zoom, Calendly, etc.), it is almost always
+"Notification" — not Urgent, not Support, not Sales Lead — regardless of the subject line wording.
+
+Respond with ONLY valid JSON, no markdown, no extra text, in this exact format:
 {{
   "category": one of {CATEGORIES},
   "reason": "one short sentence explaining why",
-  "draft_reply": "a short, professional draft reply (2-4 sentences). If category is Spam, set this to an empty string."
+  "draft_reply": "a short, professional draft reply (2-4 sentences), or empty string per the rule above"
 }}
 
 From: {sender}
@@ -185,11 +206,15 @@ def process_inbox(service):
         if category not in CATEGORIES:
             category = "Other"
 
+        # Hard rule at the code level, not just the prompt: only these
+        # categories are ever allowed to get a draft reply.
+        DRAFT_ALLOWED_CATEGORIES = {"Urgent", "Sales Lead", "Support"}
+
         service.users().messages().modify(
             userId="me", id=msg_meta["id"], body={"addLabelIds": [label_ids[category]]}
         ).execute()
 
-        if category != "Spam" and result.get("draft_reply"):
+        if category in DRAFT_ALLOWED_CATEGORIES and result.get("draft_reply"):
             create_draft_reply(
                 service, sender, subject, result["draft_reply"], msg["threadId"], message_id_header
             )
@@ -230,5 +255,3 @@ def oauth2callback():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-
-
